@@ -1,6 +1,22 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
+// Copyright (c) 2019 Andy Pan
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package gnet
 
@@ -9,6 +25,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	errorset "github.com/panjf2000/gnet/errors"
 )
 
 // CRLFByte represents a byte of CRLF.
@@ -58,10 +76,10 @@ func (cc *BuiltInFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
 // Decode ...
 func (cc *BuiltInFrameCodec) Decode(c Conn) ([]byte, error) {
 	buf := c.Read()
-	c.ResetBuffer()
 	if len(buf) == 0 {
-		buf = nil
+		return nil, nil
 	}
+	c.ResetBuffer()
 	return buf, nil
 }
 
@@ -75,7 +93,7 @@ func (cc *LineBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, CRLFByte)
 	if idx == -1 {
-		return nil, ErrCRLFNotFound
+		return nil, errorset.ErrCRLFNotFound
 	}
 	c.ShiftN(idx + 1)
 	return buf[:idx], nil
@@ -96,7 +114,7 @@ func (cc *DelimiterBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 	buf := c.Read()
 	idx := bytes.IndexByte(buf, cc.delimiter)
 	if idx == -1 {
-		return nil, errDelimiterNotFound
+		return nil, errorset.ErrDelimiterNotFound
 	}
 	c.ShiftN(idx + 1)
 	return buf[:idx], nil
@@ -110,7 +128,7 @@ func NewFixedLengthFrameCodec(frameLength int) *FixedLengthFrameCodec {
 // Encode ...
 func (cc *FixedLengthFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
 	if len(buf)%cc.frameLength != 0 {
-		return nil, errInvalidFixedLength
+		return nil, errorset.ErrInvalidFixedLength
 	}
 	return buf, nil
 }
@@ -119,7 +137,7 @@ func (cc *FixedLengthFrameCodec) Encode(c Conn, buf []byte) ([]byte, error) {
 func (cc *FixedLengthFrameCodec) Decode(c Conn) ([]byte, error) {
 	size, buf := c.ReadN(cc.frameLength)
 	if size == 0 {
-		return nil, errUnexpectedEOF
+		return nil, errorset.ErrUnexpectedEOF
 	}
 	c.ShiftN(size)
 	return buf, nil
@@ -167,7 +185,7 @@ func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, buf []byte) (out []byte, er
 	}
 
 	if length < 0 {
-		return nil, errTooLessLength
+		return nil, errorset.ErrTooLessLength
 	}
 
 	switch cc.encoderConfig.LengthFieldLength {
@@ -194,7 +212,7 @@ func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, buf []byte) (out []byte, er
 		out = make([]byte, 8)
 		cc.encoderConfig.ByteOrder.PutUint64(out, uint64(length))
 	default:
-		return nil, errUnsupportedLength
+		return nil, errorset.ErrUnsupportedLength
 	}
 
 	out = append(out, buf...)
@@ -204,8 +222,12 @@ func (cc *LengthFieldBasedFrameCodec) Encode(c Conn, buf []byte) (out []byte, er
 type innerBuffer []byte
 
 func (in *innerBuffer) readN(n int) (buf []byte, err error) {
-	if n <= 0 {
-		return nil, errors.New("zero or negative length is invalid")
+	if n == 0 {
+		return nil, nil
+	}
+
+	if n < 0 {
+		return nil, errors.New("negative length is invalid")
 	} else if n > len(*in) {
 		return nil, errors.New("exceeding buffer length")
 	}
@@ -222,10 +244,10 @@ func (cc *LengthFieldBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 		err    error
 	)
 	in = c.Read()
-	if cc.decoderConfig.LengthFieldOffset > 0 { //discard header(offset)
+	if cc.decoderConfig.LengthFieldOffset > 0 { // discard header(offset)
 		header, err = in.readN(cc.decoderConfig.LengthFieldOffset)
 		if err != nil {
-			return nil, errUnexpectedEOF
+			return nil, errorset.ErrUnexpectedEOF
 		}
 	}
 
@@ -238,7 +260,7 @@ func (cc *LengthFieldBasedFrameCodec) Decode(c Conn) ([]byte, error) {
 	msgLength := int(frameLength) + cc.decoderConfig.LengthAdjustment
 	msg, err := in.readN(msgLength)
 	if err != nil {
-		return nil, errUnexpectedEOF
+		return nil, errorset.ErrUnexpectedEOF
 	}
 
 	fullMessage := make([]byte, len(header)+len(lenBuf)+msgLength)
@@ -254,35 +276,35 @@ func (cc *LengthFieldBasedFrameCodec) getUnadjustedFrameLength(in *innerBuffer) 
 	case 1:
 		b, err := in.readN(1)
 		if err != nil {
-			return nil, 0, errUnexpectedEOF
+			return nil, 0, errorset.ErrUnexpectedEOF
 		}
 		return b, uint64(b[0]), nil
 	case 2:
 		lenBuf, err := in.readN(2)
 		if err != nil {
-			return nil, 0, errUnexpectedEOF
+			return nil, 0, errorset.ErrUnexpectedEOF
 		}
 		return lenBuf, uint64(cc.decoderConfig.ByteOrder.Uint16(lenBuf)), nil
 	case 3:
 		lenBuf, err := in.readN(3)
 		if err != nil {
-			return nil, 0, errUnexpectedEOF
+			return nil, 0, errorset.ErrUnexpectedEOF
 		}
 		return lenBuf, readUint24(cc.decoderConfig.ByteOrder, lenBuf), nil
 	case 4:
 		lenBuf, err := in.readN(4)
 		if err != nil {
-			return nil, 0, errUnexpectedEOF
+			return nil, 0, errorset.ErrUnexpectedEOF
 		}
 		return lenBuf, uint64(cc.decoderConfig.ByteOrder.Uint32(lenBuf)), nil
 	case 8:
 		lenBuf, err := in.readN(8)
 		if err != nil {
-			return nil, 0, errUnexpectedEOF
+			return nil, 0, errorset.ErrUnexpectedEOF
 		}
 		return lenBuf, cc.decoderConfig.ByteOrder.Uint64(lenBuf), nil
 	default:
-		return nil, 0, errUnsupportedLength
+		return nil, 0, errorset.ErrUnsupportedLength
 	}
 }
 

@@ -1,14 +1,31 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Copyright 2018 Joshua J Baker. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
+// Copyright (c) 2019 Andy Pan
+// Copyright (c) 2018 Joshua J Baker
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-// +build linux darwin netbsd freebsd openbsd dragonfly
+// +build linux freebsd dragonfly darwin
 
 package gnet
 
 import (
 	"net"
+	"os"
 
 	"github.com/panjf2000/gnet/internal/netpoll"
 	"github.com/panjf2000/gnet/pool/bytebuffer"
@@ -37,7 +54,7 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr) *conn {
 		fd:             fd,
 		sa:             sa,
 		loop:           el,
-		codec:          el.codec,
+		codec:          el.svr.codec,
 		inboundBuffer:  prb.Get(),
 		outboundBuffer: prb.Get(),
 	}
@@ -62,7 +79,7 @@ func newUDPConn(fd int, el *eventloop, sa unix.Sockaddr) *conn {
 	return &conn{
 		fd:         fd,
 		sa:         sa,
-		localAddr:  el.svr.ln.lnaddr,
+		localAddr:  el.ln.lnaddr,
 		remoteAddr: netpoll.SockaddrToUDPAddr(sa),
 	}
 }
@@ -89,25 +106,31 @@ func (c *conn) read() ([]byte, error) {
 	return c.codec.Decode(c)
 }
 
-func (c *conn) write(buf []byte) {
-	if !c.outboundBuffer.IsEmpty() {
-		_, _ = c.outboundBuffer.Write(buf)
+func (c *conn) write(buf []byte) (err error) {
+	var outFrame []byte
+	if outFrame, err = c.codec.Encode(c, buf); err != nil {
 		return
 	}
-	n, err := unix.Write(c.fd, buf)
-	if err != nil {
+	if !c.outboundBuffer.IsEmpty() {
+		_, _ = c.outboundBuffer.Write(outFrame)
+		return
+	}
+
+	var n int
+	if n, err = unix.Write(c.fd, outFrame); err != nil {
 		if err == unix.EAGAIN {
-			_, _ = c.outboundBuffer.Write(buf)
-			_ = c.loop.poller.ModReadWrite(c.fd)
+			_, _ = c.outboundBuffer.Write(outFrame)
+			err = c.loop.poller.ModReadWrite(c.fd)
 			return
 		}
-		_ = c.loop.loopCloseConn(c, err)
+		_ = c.loop.loopCloseConn(c, os.NewSyscallError("write", err))
 		return
 	}
-	if n < len(buf) {
-		_, _ = c.outboundBuffer.Write(buf[n:])
-		_ = c.loop.poller.ModReadWrite(c.fd)
+	if n < len(outFrame) {
+		_, _ = c.outboundBuffer.Write(outFrame[n:])
+		err = c.loop.poller.ModReadWrite(c.fd)
 	}
+	return
 }
 
 func (c *conn) sendTo(buf []byte) error {
@@ -189,17 +212,13 @@ func (c *conn) BufferLength() int {
 	return c.inboundBuffer.Length() + len(c.buffer)
 }
 
-func (c *conn) AsyncWrite(buf []byte) (err error) {
-	var encodedBuf []byte
-	if encodedBuf, err = c.codec.Encode(c, buf); err == nil {
-		return c.loop.poller.Trigger(func() error {
-			if c.opened {
-				c.write(encodedBuf)
-			}
-			return nil
-		})
-	}
-	return
+func (c *conn) AsyncWrite(buf []byte) error {
+	return c.loop.poller.Trigger(func() (err error) {
+		if c.opened {
+			err = c.write(buf)
+		}
+		return
+	})
 }
 
 func (c *conn) SendTo(buf []byte) error {

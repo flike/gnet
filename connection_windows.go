@@ -1,9 +1,23 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Copyright 2018 Joshua J Baker. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
-
-// +build windows
+// Copyright (c) 2019 Andy Pan
+// Copyright (c) 2018 Joshua J Baker
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package gnet
 
@@ -24,12 +38,12 @@ type wakeReq struct {
 	c *stdConn
 }
 
-type tcpIn struct {
+type tcpConn struct {
 	c  *stdConn
-	in *bytebuffer.ByteBuffer
+	bb *bytebuffer.ByteBuffer
 }
 
-type udpIn struct {
+type udpConn struct {
 	c *stdConn
 }
 
@@ -45,11 +59,24 @@ type stdConn struct {
 	inboundBuffer *ringbuffer.RingBuffer // buffer for data from client
 }
 
+func packTCPConn(c *stdConn, buf []byte) *tcpConn {
+	packet := &tcpConn{c: c}
+	packet.bb = bytebuffer.Get()
+	_, _ = packet.bb.Write(buf)
+	return packet
+}
+
+func packUDPConn(c *stdConn, buf []byte) *udpConn {
+	_, _ = c.buffer.Write(buf)
+	packet := &udpConn{c: c}
+	return packet
+}
+
 func newTCPConn(conn net.Conn, el *eventloop) *stdConn {
 	return &stdConn{
 		conn:          conn,
 		loop:          el,
-		codec:         el.codec,
+		codec:         el.svr.codec,
 		inboundBuffer: prb.Get(),
 	}
 }
@@ -64,12 +91,12 @@ func (c *stdConn) releaseTCP() {
 	c.buffer = nil
 }
 
-func newUDPConn(el *eventloop, localAddr, remoteAddr net.Addr, buf *bytebuffer.ByteBuffer) *stdConn {
+func newUDPConn(el *eventloop, localAddr, remoteAddr net.Addr) *stdConn {
 	return &stdConn{
 		loop:       el,
+		buffer:     bytebuffer.Get(),
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
-		buffer:     buf,
 	}
 }
 
@@ -162,9 +189,9 @@ func (c *stdConn) BufferLength() int {
 func (c *stdConn) AsyncWrite(buf []byte) (err error) {
 	var encodedBuf []byte
 	if encodedBuf, err = c.codec.Encode(c, buf); err == nil {
-		c.loop.ch <- func() error {
-			_, _ = c.conn.Write(encodedBuf)
-			return nil
+		c.loop.ch <- func() (err error) {
+			_, err = c.conn.Write(encodedBuf)
+			return
 		}
 	}
 	return

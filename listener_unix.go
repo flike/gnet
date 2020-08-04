@@ -1,9 +1,24 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Copyright 2018 Joshua J Baker. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
+// Copyright (c) 2019 Andy Pan
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-// +build linux darwin netbsd freebsd openbsd dragonfly
+// +build linux freebsd dragonfly darwin
 
 package gnet
 
@@ -12,56 +27,54 @@ import (
 	"os"
 	"sync"
 
+	"github.com/panjf2000/gnet/errors"
+	"github.com/panjf2000/gnet/internal/reuseport"
 	"golang.org/x/sys/unix"
 )
 
 type listener struct {
-	f             *os.File
-	fd            int
-	ln            net.Listener
 	once          sync.Once
-	pconn         net.PacketConn
+	fd            int
 	lnaddr        net.Addr
+	reusePort     bool
 	addr, network string
 }
 
-// system takes the net listener and detaches it from it's parent
-// event loop, grabs the file descriptor, and makes it non-blocking.
-func (ln *listener) system() error {
-	var err error
-	switch netln := ln.ln.(type) {
-	case nil:
-		switch pconn := ln.pconn.(type) {
-		case *net.UDPConn:
-			ln.f, err = pconn.File()
-		}
-	case *net.TCPListener:
-		ln.f, err = netln.File()
-	case *net.UnixListener:
-		ln.f, err = netln.File()
+func (ln *listener) normalize() (err error) {
+	switch ln.network {
+	case "tcp", "tcp4", "tcp6":
+		ln.fd, ln.lnaddr, err = reuseport.TCPSocket(ln.network, ln.addr, ln.reusePort)
+		ln.network = "tcp"
+	case "udp", "udp4", "udp6":
+		ln.fd, ln.lnaddr, err = reuseport.UDPSocket(ln.network, ln.addr, ln.reusePort)
+		ln.network = "udp"
+	case "unix":
+		_ = os.RemoveAll(ln.addr)
+		ln.fd, ln.lnaddr, err = reuseport.UnixSocket(ln.network, ln.addr, ln.reusePort)
+	default:
+		err = errors.ErrUnsupportedProtocol
 	}
 	if err != nil {
-		ln.close()
-		return err
+		return
 	}
-	ln.fd = int(ln.f.Fd())
-	return unix.SetNonblock(ln.fd, true)
+
+	return
 }
 
 func (ln *listener) close() {
 	ln.once.Do(
 		func() {
-			if ln.f != nil {
-				sniffErrorAndLog(ln.f.Close())
-			}
-			if ln.ln != nil {
-				sniffErrorAndLog(ln.ln.Close())
-			}
-			if ln.pconn != nil {
-				sniffErrorAndLog(ln.pconn.Close())
+			if ln.fd > 0 {
+				sniffErrorAndLog(os.NewSyscallError("close", unix.Close(ln.fd)))
 			}
 			if ln.network == "unix" {
 				sniffErrorAndLog(os.RemoveAll(ln.addr))
 			}
 		})
+}
+
+func initListener(network, addr string, reusePort bool) (l *listener, err error) {
+	l = &listener{network: network, addr: addr, reusePort: reusePort}
+	err = l.normalize()
+	return
 }

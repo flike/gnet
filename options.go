@@ -1,10 +1,30 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
+// Copyright (c) 2019 Andy Pan
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package gnet
 
-import "time"
+import (
+	"time"
+
+	"github.com/panjf2000/gnet/internal/logging"
+)
 
 // Option is a function that will set up option.
 type Option func(opts *Options)
@@ -38,15 +58,15 @@ type Options struct {
 	// Ticker indicates whether the ticker has been set up.
 	Ticker bool
 
-	// TCPKeepAlive (SO_KEEPALIVE) socket option.
+	// TCPKeepAlive sets up a duration for (SO_KEEPALIVE) socket option.
 	TCPKeepAlive time.Duration
 
 	// ICodec encodes and decodes TCP stream.
 	Codec ICodec
 
 	// Logger is the customized logger for logging info, if it is not set,
-	// default standard logger from log package is used.
-	Logger Logger
+	// then gnet will use the default logger powered by go.uber.org/zap.
+	Logger logging.Logger
 }
 
 // WithOptions sets up all options.
@@ -106,7 +126,7 @@ func WithCodec(codec ICodec) Option {
 }
 
 // WithLogger sets up a customized logger.
-func WithLogger(logger Logger) Option {
+func WithLogger(logger logging.Logger) Option {
 	return func(opts *Options) {
 		opts.Logger = logger
 	}

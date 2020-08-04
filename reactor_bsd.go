@@ -1,19 +1,41 @@
-// Copyright 2019 Andy Pan. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
+// Copyright (c) 2019 Andy Pan
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
-// +build darwin netbsd freebsd openbsd dragonfly
+// +build freebsd dragonfly darwin
 
 package gnet
 
-import "github.com/panjf2000/gnet/internal/netpoll"
+import (
+	"github.com/panjf2000/gnet/errors"
+	"github.com/panjf2000/gnet/internal/netpoll"
+)
 
 func (svr *server) activateMainReactor() {
 	defer svr.signalShutdown()
+	switch err := svr.mainLoop.poller.Polling(func(fd int, filter int16) error { return svr.acceptNewConnection(fd) }); err {
+	case errors.ErrServerShutdown:
+		svr.logger.Infof("Main reactor is exiting normally on the signal error: %v", err)
+	default:
+		svr.logger.Errorf("Main reactor is exiting due to an unexpected error: %v", err)
 
-	svr.logger.Printf("main reactor exits with error:%v\n", svr.mainLoop.poller.Polling(func(fd int, filter int16) error {
-		return svr.acceptNewConnection(fd)
-	}))
+	}
 }
 
 func (svr *server) activateSubReactor(el *eventloop) {
@@ -28,8 +50,7 @@ func (svr *server) activateSubReactor(el *eventloop) {
 	if el.idx == 0 && svr.opts.Ticker {
 		go el.loopTicker()
 	}
-
-	svr.logger.Printf("event-loop:%d exits with error:%v\n", el.idx, el.poller.Polling(func(fd int, filter int16) error {
+	switch err := el.poller.Polling(func(fd int, filter int16) error {
 		if c, ack := el.connections[fd]; ack {
 			if filter == netpoll.EVFilterSock {
 				return el.loopCloseConn(c, nil)
@@ -51,5 +72,10 @@ func (svr *server) activateSubReactor(el *eventloop) {
 			}
 		}
 		return nil
-	}))
+	}); err {
+	case errors.ErrServerShutdown:
+		svr.logger.Infof("Event-loop(%d) is exiting normally on the signal error: %v", el.idx, err)
+	default:
+		svr.logger.Errorf("Event-loop(%d) is exiting due to an unexpected error: %v", el.idx, err)
+	}
 }
